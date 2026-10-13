@@ -1,87 +1,165 @@
-import React, { useState, useMemo, useRef } from 'react';
+
+import React, { useState, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FiArrowLeft, FiPlus, FiTrash2, FiPrinter, FiCheck, FiUser } from 'react-icons/fi';
+import {
+  FiArrowLeft,
+  FiPlus,
+  FiTrash2,
+  FiPrinter,
+  FiCheck,
+  FiUser,
+} from 'react-icons/fi';
 import { useKhata } from './KhataContext';
 import { useToast } from './ToastContext';
 import { BillPrintModal } from './BillPrintModal';
 import type { BillItem, Bill } from './database.types';
+
+const createEmptyItem = (): BillItem => ({
+  name: '',
+  rate: 0,
+  quantity: 1,
+  unit: 'kg',
+  total: 0,
+});
 
 export const BillCreate: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preselectedCustomerId = searchParams.get('customerId') || '';
 
-  const { shop, customers, bills, addBill } = useKhata();
+  const { customers, bills, addBill } = useKhata();
   const { showToast } = useToast();
 
-  const [selectedCustomerId, setSelectedCustomerId] = useState(preselectedCustomerId);
-  const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-  const [paymentStatus, setPaymentStatus] = useState<'pending' | 'paid'>('pending');
-  const [items, setItems] = useState<BillItem[]>([
-    { name: '', rate: 0, quantity: 1, unit: 'kg', total: 0 },
-  ]);
-
-  // Saved bill for immediate printing
+  const [selectedCustomerId, setSelectedCustomerId] =
+    useState(preselectedCustomerId);
+  const [billDate, setBillDate] = useState(
+    new Date().toLocaleDateString('en-CA')
+  );
+  const [paymentStatus, setPaymentStatus] =
+    useState<'pending' | 'paid'>('pending');
+  const [items, setItems] = useState<BillItem[]>([createEmptyItem()]);
   const [createdBill, setCreatedBill] = useState<Bill | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Generate next bill number
-  const nextBillNumber = useMemo(() => {
-    const count = bills.length + 1001;
-    return `KB-${count}`;
-  }, [bills]);
+  const nextBillNumber = useMemo(
+    () => `KB-${bills.length + 1001}`,
+    [bills.length]
+  );
 
-  // Selected customer object
-  const currentCustomer = customers.find((c) => c.id === selectedCustomerId);
+  const currentCustomer = customers.find(
+    (customer) => customer.id === selectedCustomerId
+  );
 
-  // Grand total calculation
-  const grandTotal = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.total || item.rate * item.quantity || 0), 0);
-  }, [items]);
+  // Only named items count toward the bill total.
+  const validItems = useMemo(
+    () =>
+      items
+        .filter((item) => item.name.trim().length > 0)
+        .map((item) => {
+          const rate = Number(item.rate) || 0;
+          const quantity = Number(item.quantity) || 0;
 
-  // Handle item row change
-  const handleItemChange = (index: number, field: keyof BillItem, value: any) => {
-    setItems((prev) => {
-      const updated = [...prev];
-      const target = { ...updated[index], [field]: value };
+          return {
+            ...item,
+            name: item.name.trim(),
+            rate,
+            quantity,
+            total: Math.round(rate * quantity * 100) / 100,
+          };
+        }),
+    [items]
+  );
 
-      if (field === 'rate' || field === 'quantity') {
-        const r = field === 'rate' ? parseFloat(value) || 0 : target.rate;
-        const q = field === 'quantity' ? parseFloat(value) || 0 : target.quantity;
-        target.total = r * q;
-      }
+  const grandTotal = useMemo(
+    () =>
+      validItems.reduce(
+        (sum, item) => sum + item.total,
+        0
+      ),
+    [validItems]
+  );
 
-      updated[index] = target;
-      return updated;
-    });
+  const handleItemChange = (
+    index: number,
+    field: keyof BillItem,
+    value: string
+  ) => {
+    setItems((previous) =>
+      previous.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+
+        const updated = { ...item };
+
+        if (field === 'name' || field === 'unit') {
+          updated[field] = value;
+        } else if (field === 'rate' || field === 'quantity') {
+          const numberValue = value === '' ? 0 : Number(value);
+          if (!Number.isFinite(numberValue) || numberValue < 0) {
+            return item;
+          }
+
+          updated[field] = numberValue;
+        }
+
+        updated.total =
+          (Number(updated.rate) || 0) *
+          (Number(updated.quantity) || 0);
+
+        return updated;
+      })
+    );
   };
 
   const handleAddItemRow = () => {
-    setItems((prev) => [...prev, { name: '', rate: 0, quantity: 1, unit: 'kg', total: 0 }]);
+    setItems((previous) => [...previous, createEmptyItem()]);
+
+    showToast('नई सामान पंक्ति जोड़ दी गई', 'success');
   };
 
   const handleRemoveItemRow = (index: number) => {
-    if (items.length === 1) {
-      setItems([{ name: '', rate: 0, quantity: 1, unit: 'kg', total: 0 }]);
-      return;
-    }
-    setItems((prev) => prev.filter((_, i) => i !== index));
+    setItems((previous) => {
+      if (previous.length === 1) return [createEmptyItem()];
+      return previous.filter((_, itemIndex) => itemIndex !== index);
+    });
   };
 
-  const handleSaveBill = async (andPrint: boolean = false) => {
+  const handleSaveBill = async (andPrint = false) => {
+    if (saving) return;
+
     if (!selectedCustomerId) {
       showToast('कृपया ग्राहक का चयन करें', 'error');
       return;
     }
 
-    const validItems = items.filter((it) => it.name.trim().length > 0);
+    if (!billDate) {
+      showToast('कृपया बिल की तारीख चुनें', 'error');
+      return;
+    }
+
     if (validItems.length === 0) {
-      showToast('कृपया कम से कम एक सामान का नाम दर्ज करें', 'error');
+      showToast('कम से कम एक सामान का नाम दर्ज करें', 'error');
+      return;
+    }
+
+    const invalidItem = validItems.find(
+      (item) =>
+        !Number.isFinite(item.rate) ||
+        !Number.isFinite(item.quantity) ||
+        item.rate < 0 ||
+        item.quantity <= 0
+    );
+
+    if (invalidItem) {
+      showToast(
+        'हर सामान की दर और मात्रा सही दर्ज करें। मात्रा शून्य से अधिक होनी चाहिए।',
+        'error'
+      );
       return;
     }
 
     setSaving(true);
+
     try {
       const newBill = await addBill({
         billNumber: nextBillNumber,
@@ -92,7 +170,10 @@ export const BillCreate: React.FC = () => {
         paymentStatus,
       });
 
-      showToast(`बिल ${newBill.billNumber} सफलतापूर्वक सहेजा गया!`, 'success');
+      showToast(
+        `बिल ${newBill.billNumber} सफलतापूर्वक सहेजा गया!`,
+        'success'
+      );
 
       if (andPrint) {
         setCreatedBill(newBill);
@@ -100,47 +181,53 @@ export const BillCreate: React.FC = () => {
       } else {
         navigate(`/customer/${selectedCustomerId}`);
       }
-    } catch (err: any) {
-      showToast('बिल सहेजने में त्रुटि: ' + err.message, 'error');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'अज्ञात त्रुटि';
+
+      showToast('बिल सहेजने में त्रुटि: ' + message, 'error');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 pb-28">
-      {/* Top Header */}
-      <div className="flex items-center justify-between mb-4">
+    <div className="max-w-4xl mx-auto px-3 sm:px-4 py-5 pb-28">
+      <div className="flex items-center justify-between gap-2 mb-4">
         <button
+          type="button"
           onClick={() => navigate(-1)}
-          className="text-xs font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5 cursor-pointer"
+          className="min-h-11 px-2 text-sm font-bold text-slate-600 flex items-center gap-2"
         >
-          <FiArrowLeft className="w-4 h-4" /> वापस
+          <FiArrowLeft /> वापस
         </button>
 
-        <span className="text-xs font-mono font-bold text-slate-500">
-          रसीद संख्या: <strong className="text-blue-600 font-black">{nextBillNumber}</strong>
+        <span className="text-xs font-bold text-slate-500">
+          बिल नं: <strong className="text-emerald-700">{nextBillNumber}</strong>
         </span>
       </div>
 
-      <div className="p-6 bg-white rounded-3xl border border-slate-200 shadow-sm space-y-6">
-        {/* Customer & Date Selection */}
+      <div className="p-3 sm:p-6 bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-5">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="sm:col-span-2">
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              ग्राहक चुनें (Select Customer) *
+            <label className="block text-sm font-bold text-slate-700 mb-2">
+              ग्राहक चुनें *
             </label>
+
             <div className="relative">
-              <FiUser className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+              <FiUser className="absolute left-3 top-3.5 text-slate-400" />
               <select
                 value={selectedCustomerId}
-                onChange={(e) => setSelectedCustomerId(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                onChange={(event) =>
+                  setSelectedCustomerId(event.target.value)
+                }
+                className="w-full min-h-12 pl-10 pr-3 rounded-xl border border-slate-200 text-sm font-semibold"
               >
-                <option value="">-- ग्राहक का चयन करें --</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.phone}) - बकाया: ₹{c.runningBalance.toFixed(2)}
+                <option value="">-- ग्राहक चुनें --</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name} ({customer.phone}) — बकाया ₹
+                    {Number(customer.runningBalance || 0).toFixed(2)}
                   </option>
                 ))}
               </select>
@@ -148,182 +235,216 @@ export const BillCreate: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              बिल तारीख (Bill Date)
+            <label className="block text-sm font-bold text-slate-700 mb-2">
+              बिल की तारीख *
             </label>
             <input
               type="date"
               value={billDate}
-              onChange={(e) => setBillDate(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              onChange={(event) => setBillDate(event.target.value)}
+              className="w-full min-h-12 px-3 rounded-xl border border-slate-200 text-sm"
             />
           </div>
         </div>
 
-        {/* Payment Status Toggle */}
-        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between">
-          <span className="text-xs font-black text-slate-700">भुगतान स्थिति (Status):</span>
-          <div className="flex items-center gap-2">
+        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+          <p className="text-sm font-bold text-slate-700 mb-3">
+            भुगतान की स्थिति
+          </p>
+
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => setPaymentStatus('pending')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-12 rounded-xl px-2 text-sm font-bold ${
                 paymentStatus === 'pending'
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-white border border-slate-200 text-slate-700'
               }`}
             >
-              🔴 उधार (खाते में जुड़ेगा)
+              🔴 उधार
             </button>
+
             <button
               type="button"
               onClick={() => setPaymentStatus('paid')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-12 rounded-xl px-2 text-sm font-bold ${
                 paymentStatus === 'paid'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-white border border-slate-200 text-slate-700'
               }`}
             >
-              🟢 चुकता (नकद भुगतान)
+              🟢 चुकता
             </button>
           </div>
         </div>
 
-        {/* Items Table */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-              सामान की सूची (Item Rows)
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h3 className="text-sm font-black text-slate-800">
+              सामान की सूची
             </h3>
-            <span className="text-xs font-bold text-slate-500">{items.length} पंक्तियाँ</span>
+            <span className="text-xs text-slate-500">
+              {validItems.length} सामान
+            </span>
           </div>
 
-          <div className="border border-slate-200 rounded-2xl overflow-hidden">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-900 text-white font-black text-[11px]">
-                  <th className="p-2.5 text-center w-10">क्र.</th>
-                  <th className="p-2.5">सामान का नाम (Item Description)</th>
-                  <th className="p-2.5 w-24 text-right">दर (₹)</th>
-                  <th className="p-2.5 w-20 text-center">मात्रा</th>
-                  <th className="p-2.5 w-16 text-center">इकाई</th>
-                  <th className="p-2.5 w-24 text-right">कुल (₹)</th>
-                  <th className="p-2.5 w-10 text-center"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {items.map((it, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50/50">
-                    <td className="p-2 text-center font-bold text-slate-400">{idx + 1}</td>
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        placeholder="उदा. चीनी, तेल, कपड़ा, साबुन"
-                        value={it.name}
-                        onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-500"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="any"
-                        placeholder="0.00"
-                        value={it.rate || ''}
-                        onChange={(e) => handleItemChange(idx, 'rate', e.target.value)}
-                        className="w-full text-right px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-500"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="any"
-                        value={it.quantity || ''}
-                        onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
-                        className="w-full text-center px-1.5 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-500"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <select
-                        value={it.unit || 'kg'}
-                        onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
-                        className="w-full text-center py-1.5 rounded-lg border border-slate-200 text-xs font-semibold focus:outline-none"
-                      >
-                        <option value="kg">kg</option>
-                        <option value="gm">gm</option>
-                        <option value="pkt">पैकेट</option>
-                        <option value="pc">नग</option>
-                        <option value="ltr">लीटर</option>
-                        <option value="mtr">मीटर</option>
-                      </select>
-                    </td>
-                    <td className="p-2 text-right font-black text-slate-900">
-                      ₹{it.total.toFixed(2)}
-                    </td>
-                    <td className="p-2 text-center">
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveItemRow(idx)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                      >
-                        <FiTrash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-3">
+            {items.map((item, index) => (
+              <div
+                key={index}
+                className="p-3 rounded-2xl border border-slate-200 bg-white space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-black text-emerald-700">
+                    सामान {index + 1}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveItemRow(index)}
+                    aria-label={`सामान ${index + 1} हटाएँ`}
+                    className="min-h-10 min-w-10 flex items-center justify-center rounded-lg text-rose-600 bg-rose-50"
+                  >
+                    <FiTrash2 />
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">
+                    सामान का नाम
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="जैसे चीनी, तेल, साबुन"
+                    value={item.name}
+                    onChange={(event) =>
+                      handleItemChange(index, 'name', event.target.value)
+                    }
+                    className="w-full min-h-11 px-3 rounded-xl border border-slate-200 text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      दर (₹)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      value={item.rate || ''}
+                      onChange={(event) =>
+                        handleItemChange(index, 'rate', event.target.value)
+                      }
+                      className="w-full min-h-11 px-2 rounded-xl border border-slate-200 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      मात्रा
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={item.quantity || ''}
+                      onChange={(event) =>
+                        handleItemChange(
+                          index,
+                          'quantity',
+                          event.target.value
+                        )
+                      }
+                      className="w-full min-h-11 px-2 rounded-xl border border-slate-200 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      इकाई
+                    </label>
+                    <select
+                      value={item.unit || 'kg'}
+                      onChange={(event) =>
+                        handleItemChange(index, 'unit', event.target.value)
+                      }
+                      className="w-full min-h-11 px-2 rounded-xl border border-slate-200 text-sm"
+                    >
+                      <option value="kg">किलो</option>
+                      <option value="gm">ग्राम</option>
+                      <option value="pkt">पैकेट</option>
+                      <option value="pc">नग</option>
+                      <option value="ltr">लीटर</option>
+                      <option value="mtr">मीटर</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      कुल (₹)
+                    </label>
+                    <div className="min-h-11 flex items-center px-2 rounded-xl bg-emerald-50 text-emerald-800 font-black text-sm">
+                      ₹{(
+                        (Number(item.rate) || 0) *
+                        (Number(item.quantity) || 0)
+                      ).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
           <button
             type="button"
             onClick={handleAddItemRow}
-            className="mt-3 px-3.5 py-1.5 rounded-xl border border-dashed border-blue-400 text-blue-600 hover:bg-blue-50 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="mt-3 w-full min-h-12 px-4 rounded-xl border-2 border-dashed border-emerald-500 bg-emerald-50 text-emerald-800 text-sm font-black flex items-center justify-center gap-2"
           >
-            <FiPlus className="w-4 h-4" /> सामान की पंक्ति जोड़ें (+ Row)
+            <FiPlus /> + सामान जोड़ें
           </button>
         </div>
 
-        {/* Grand Total Bar */}
-        <div className="p-4 bg-slate-900 text-white rounded-2xl flex items-center justify-between">
+        <div className="p-4 bg-slate-900 text-white rounded-2xl flex items-center justify-between gap-3">
           <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-              कुल बिल राशि (Grand Total)
+            <span className="block text-xs text-slate-300 font-bold">
+              कुल बिल राशि
             </span>
-            <span className="text-xs text-slate-300 font-semibold">
-              {items.filter((i) => i.name.trim()).length} सामान का योग
+            <span className="text-xs text-slate-400">
+              {validItems.length} सामान
             </span>
           </div>
-          <div className="text-3xl font-black text-emerald-400">
+          <span className="text-2xl sm:text-3xl font-black text-emerald-400">
             ₹{grandTotal.toFixed(2)}
-          </div>
+          </span>
         </div>
 
-        {/* Action Buttons */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
             type="button"
             disabled={saving}
             onClick={() => handleSaveBill(false)}
-            className="w-full py-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+            className="w-full min-h-12 rounded-xl bg-slate-100 text-slate-800 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            <FiCheck className="w-4 h-4 text-emerald-600" />
-            {saving ? 'सहेजा जा रहा है...' : 'सिर्फ बिल सहेजें (Save Only)'}
+            <FiCheck className="text-emerald-600" />
+            {saving ? 'सहेजा जा रहा है...' : 'बिल सेव करें'}
           </button>
 
           <button
             type="button"
             disabled={saving}
             onClick={() => handleSaveBill(true)}
-            className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-sm shadow-md shadow-blue-500/25 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+            className="w-full min-h-12 rounded-xl bg-emerald-600 text-white font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            <FiPrinter className="w-4 h-4" />
-            {saving ? 'सहेजा जा रहा है...' : 'सहेजें और प्रिंट/PDF करें (Save & Print)'}
+            <FiPrinter />
+            {saving ? 'सहेजा जा रहा है...' : 'सेव करें और PDF बनाएँ'}
           </button>
         </div>
       </div>
 
-      {/* Bill Print Modal */}
       {createdBill && currentCustomer && (
         <BillPrintModal
           isOpen={isPrintModalOpen}
