@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { ShopProfile, Customer, Bill, PaymentEntry } from './database.types';
 import * as db from './offlineDb';
-
+import { downloadBackupFile } from './utils/backupFile';
 interface KhataContextType {
   shop: ShopProfile | null;
   customers: Customer[];
