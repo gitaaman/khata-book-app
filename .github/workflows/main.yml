@@ -31,11 +31,11 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
-      - name: Setup Java JDK 17
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Build Android APK with Gradle
         working-directory: android
@@ -51,3 +51,4 @@ jobs:
           name: KhataBook-Offline-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          
