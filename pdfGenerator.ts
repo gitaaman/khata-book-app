@@ -344,3 +344,91 @@ const renderHTMLToPDF = async (htmlString: string, filename: string) => {
     } else {
       let currentY = 0;
       let pageIndex
+
+      while (currentY < canvasHeight) {
+        if (pageIndex > 0) {
+          pdf.addPage();
+        }
+
+        const sliceHeight = Math.min(pageHeightPx, canvasHeight - currentY);
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvasWidth;
+        pageCanvas.height = sliceHeight;
+
+        const ctx = pageCanvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvasWidth, sliceHeight);
+          ctx.drawImage(
+            canvas,
+            0, currentY, canvasWidth, sliceHeight,
+            0, 0, canvasWidth, sliceHeight
+          );
+        }
+
+        const sliceData = pageCanvas.toDataURL('image/jpeg', 0.98);
+        const sliceHeightInMm = (sliceHeight * pdfWidth) / canvasWidth;
+        pdf.addImage(sliceData, 'JPEG', 0, 0, pdfWidth, sliceHeightInMm);
+
+        currentY += sliceHeight;
+        pageIndex++;
+      }
+    }
+
+    pdf.save(filename);
+  } finally {
+    if (container.parentNode) {
+      document.body.removeChild(container);
+    }
+  }
+};
+
+export const generateInvoicePDF = async (
+  shop: ShopProfile,
+  customer: Customer,
+  bill: Bill
+) => {
+  let qrDataUrl = '';
+  if (shop.upiId && bill.totalAmount > 0) {
+    try {
+      qrDataUrl = await generateQRCodeDataURL(
+        shop.upiId,
+        shop.shopName,
+        bill.totalAmount,
+        bill.billNumber,
+        240
+      );
+    } catch (_) {}
+  }
+
+  const themeKey = shop.theme || 'royal-blue';
+  const html = buildInvoiceHTML(shop, themeKey, customer, bill, qrDataUrl);
+  await renderHTMLToPDF(html, `Invoice_${bill.billNumber}.pdf`);
+};
+
+export const generateConsolidatedPDF = async (
+  shop: ShopProfile,
+  customer: Customer,
+  billsList: Bill[]
+) => {
+  let computedGrandTotal = 0;
+  billsList.forEach((b) => { computedGrandTotal += b.totalAmount; });
+
+  let qrDataUrl = '';
+  if (shop.upiId && computedGrandTotal > 0) {
+    try {
+      qrDataUrl = await generateQRCodeDataURL(
+        shop.upiId,
+        shop.shopName,
+        computedGrandTotal,
+        'KhataTotal',
+        240
+      );
+    } catch (_) {}
+  }
+
+  const themeKey = shop.theme || 'royal-blue';
+  const html = buildConsolidatedHTML(shop, themeKey, customer, billsList, qrDataUrl);
+  const safeName = (customer.name || 'Customer').replace(/\s+/g, '_');
+  await renderHTMLToPDF(html, `LedgerStatement_${safeName}.pdf`);
+};
