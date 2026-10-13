@@ -1,4 +1,7 @@
-
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
+import type { ShopProfile, Customer, Bill } from './database.types';
+import { generateQRCodeDataURL } from './qrUtils';
 const renderHTMLToPDF = async (htmlString: string, filename: string) => {
   const container = document.createElement('div');
 
