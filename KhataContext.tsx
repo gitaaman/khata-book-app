@@ -208,8 +208,13 @@ export const KhataProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const exportBackup = async (): Promise<string> => {
-    return await db.exportCompleteBackup();
-  };
+const jsonData = await db.exportCompleteBackup();
+
+const date = new Date().toISOString().slice(0, 10);
+downloadBackupFile(jsonData, "KhataBook_Backup_${date}.json");
+
+return jsonData;
+};
 
   const importBackup = async (jsonString: string): Promise<boolean> => {
     setLoading(true);
